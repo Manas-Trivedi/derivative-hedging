@@ -18,5 +18,5 @@ def bs_put_price(S, K, r, sigma, T):
 def bs_delta(S, K, r, sigma, T):
     d1 = (np.log(S/K) + (r + (sigma ** 2) / 2) * T) / (sigma * np.sqrt(T))
     delta_call = norm.cdf(d1)
-    delta_put = delta_call - 1
-    return delta_call, delta_put
+    # delta_put is simply delat_call - 1
+    return delta_call
