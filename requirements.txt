@@ -2,3 +2,5 @@ numpy
 matplotlib
 scipy
 gymnasium
+stable-baselines3
+tensorboard
