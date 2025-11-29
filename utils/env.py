@@ -1,11 +1,9 @@
-import sys
 import numpy as np
 import gymnasium
 from gymnasium import spaces
 from scipy.stats import norm
-sys.path.append('../utils')
-from gbm import simulate_gbm_path
-from bsm import bs_call_price
+from .gbm import simulate_gbm_path
+from .bsm import bs_call_price
 
 class HedgingEnv(gymnasium.Env):
     """
