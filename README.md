@@ -15,6 +15,7 @@ This project covers:
 
 ```
 hedging.py                # CLI for training, evaluation, and comparison
+benchmark.py              # PPO vs delta-hedging benchmark script
 requirements.txt          # Python dependencies
 models/                   # Saved RL models
 notebooks/                # Exploratory and training notebooks
@@ -48,6 +49,22 @@ python hedging.py train --steps 200000 --reward_type hedge_error --model_name pp
 python hedging.py evaluate models/ppo_hedging_model.zip --episodes 50 --reward hedge_error
 python hedging.py compare models/ppo_hedging_model.zip --steps 252
 ```
+
+Run the benchmark to compare PPO against Black-Scholes delta hedging on the same simulated paths:
+
+```zsh
+# CLI Output
+python benchmark.py --model-path models/ppo_hedging_best.zip --episodes 250
+# JSON Export
+python benchmark.py --model-path models/ppo_hedging_best.zip --episodes 250 --json-out benchmark_results.json
+```
+
+The benchmark reports:
+- Mean squared hedging error (`hedging_mse`)
+- Variance of step PnL (`pnl_variance`)
+- Mean PnL drift
+- Terminal PnL / absolute terminal PnL
+- Turnover and average transaction cost
 
 ## Notebooks
 

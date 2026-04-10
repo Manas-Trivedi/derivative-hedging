@@ -1,0 +1,22 @@
+{
+  "ppo": {
+    "hedging_mse": 0.010957458132570359,
+    "pnl_variance": 0.010921748812165576,
+    "mean_pnl_drift": -0.0005508468819346065,
+    "mean_abs_step_pnl": 0.060155994754522824,
+    "terminal_pnl": -0.13771172048365163,
+    "terminal_abs_pnl": 1.2440924031188283,
+    "avg_turnover": 0.03275375452500534,
+    "avg_transaction_cost": 0.003218712613753956
+  },
+  "delta": {
+    "hedging_mse": 0.0007738145526238016,
+    "pnl_variance": 0.0007707383535642469,
+    "mean_pnl_drift": 0.000264787679747988,
+    "mean_abs_step_pnl": 0.015091733487068161,
+    "terminal_pnl": 0.06619691993699699,
+    "terminal_abs_pnl": 0.34478457454965183,
+    "avg_turnover": 0.021725386223531252,
+    "avg_transaction_cost": 0.002166488756745098
+  }
+}
