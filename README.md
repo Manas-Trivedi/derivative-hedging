@@ -10,6 +10,7 @@ This project covers:
 - Delta hedging strategies
 - RL-based dynamic hedging (PPO agent)
 - CLI for training, evaluation, and comparison
+- Diagnostic tooling for hedge-gap analysis and benchmark tracking
 
 ## Project Structure
 
@@ -45,18 +46,42 @@ pip install -r requirements.txt
 Run the CLI for training, evaluation, and comparison:
 
 ```zsh
-python hedging.py train --steps 200000 --reward_type hedge_error --model_name ppo_hedging_model
-python hedging.py evaluate models/ppo_hedging_model.zip --episodes 50 --reward hedge_error
-python hedging.py compare models/ppo_hedging_model.zip --steps 252
+python hedging.py train --steps 1000000 --reward-type combined --model-name ppo_hedging_v2
+python hedging.py evaluate models/ppo_hedging_v2.zip --episodes 50 --reward combined
+python hedging.py diagnose models/ppo_hedging_v2.zip --episodes 50 --json-out diagnostics.json
+python hedging.py compare models/ppo_hedging_v2.zip --steps 252
 ```
+
+Recommended retraining command:
+
+```zsh
+python hedging.py train \
+  --steps 1000000 \
+  --model-name ppo_hedging_v2 \
+  --reward-type combined \
+  --action-mode target \
+  --n-envs 8 \
+  --n-steps 2048 \
+  --batch-size 256 \
+  --net-arch 128,128 \
+  --eval-freq 50000 \
+  --checkpoint-freq 100000
+```
+
+Training now saves:
+- `models/<model_name>.zip`: final PPO model
+- `models/<model_name>/best_model/best_model.zip`: best checkpoint picked by evaluation callback
+- `models/<model_name>/checkpoints/`: intermediate checkpoints
+- `models/<model_name>/training_config.json`: reproducible training settings
+- `models/<model_name>/tensorboard/`: TensorBoard logs
 
 Run the benchmark to compare PPO against Black-Scholes delta hedging on the same simulated paths:
 
 ```zsh
 # CLI Output
-python benchmark.py --model-path models/ppo_hedging_best.zip --episodes 250
+python benchmark.py --model-path models/ppo_hedging_v2.zip --episodes 250 --action-mode target
 # JSON Export
-python benchmark.py --model-path models/ppo_hedging_best.zip --episodes 250 --json-out benchmark_results.json
+python benchmark.py --model-path models/ppo_hedging_v2.zip --episodes 250 --action-mode target --json-out benchmark_results.json
 ```
 
 The benchmark reports:
@@ -64,7 +89,20 @@ The benchmark reports:
 - Variance of step PnL (`pnl_variance`)
 - Mean PnL drift
 - Terminal PnL / absolute terminal PnL
+- Hedge-gap tracking metrics versus analytic Black-Scholes delta
 - Turnover and average transaction cost
+
+The PPO observation space now includes:
+- Normalized price
+- Time to maturity
+- Current hedge
+- Log-moneyness
+- Normalized option value
+- Black-Scholes delta teacher signal
+
+Notes before retraining:
+- Existing saved PPO models were trained on the old 3-feature observation space and are not compatible with the new policy input shape.
+- The new default setup trains PPO to predict the hedge target directly (`--action-mode target`) and uses a combined reward that penalizes both hedge slippage and transaction cost.
 
 ## Notebooks
 

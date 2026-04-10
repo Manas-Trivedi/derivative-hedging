@@ -12,6 +12,7 @@ with contextlib.redirect_stderr(_stderr_buf):
     from stable_baselines3 import PPO
 
 from utils.bsm import bs_call_price, bs_delta
+from utils.env import build_observation
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -36,10 +37,6 @@ def simulate_gbm_path_with_rng(
     return prices
 
 
-def make_observation(price: float, S0: float, t: int, steps: int, hedge: float) -> np.ndarray:
-    return np.array([price / S0, 1.0 - (t / steps), hedge], dtype=np.float32)
-
-
 def rollout_ppo(
     model: PPO,
     prices: np.ndarray,
@@ -50,7 +47,8 @@ def rollout_ppo(
     T: float,
     cost: float,
     hedge_step: float,
-) -> dict[str, np.ndarray | float]:
+    action_mode: str,
+) -> dict[str, np.ndarray]:
     steps = len(prices)
     dt = T / steps
     hedge = 0.0
@@ -59,35 +57,53 @@ def rollout_ppo(
     hedge_positions = []
     trade_sizes = []
     transaction_costs = []
+    target_deltas = []
 
     for t in range(steps - 1):
-        obs = make_observation(prices[t], S0, t, steps, hedge)
+        tau = max(T - t * dt, 0.0)
+        obs = build_observation(
+            price=prices[t],
+            S0=S0,
+            K=K,
+            mu=mu,
+            sigma=sigma,
+            tau=tau,
+            hedge=hedge,
+            total_T=T,
+        )
         action, _ = model.predict(obs, deterministic=True)
         action_value = float(np.asarray(action).reshape(-1)[0])
         action_value = float(np.clip(action_value, -1.0, 1.0))
 
         prev_hedge = hedge
-        hedge = float(np.clip(prev_hedge + action_value * hedge_step, -1.0, 1.0))
+        if action_mode == "target":
+            hedge = action_value
+        else:
+            hedge = float(np.clip(prev_hedge + action_value * hedge_step, -1.0, 1.0))
+
         delta_change = hedge - prev_hedge
         trading_cost = abs(delta_change) * cost * prices[t]
 
         cash += delta_change * prices[t] - trading_cost
         cash *= np.exp(mu * dt)
 
-        tau = max(T - (t + 1) * dt, 0.0)
-        option_value = bs_call_price(S=prices[t + 1], K=K, r=mu, sigma=sigma, T=tau)
+        next_tau = max(T - (t + 1) * dt, 0.0)
+        option_value = bs_call_price(S=prices[t + 1], K=K, r=mu, sigma=sigma, T=next_tau)
+        target_delta = float(bs_delta(prices[t + 1], K, mu, sigma, max(next_tau, 1e-12)))
         portfolio_value = option_value - hedge * prices[t + 1] + cash
 
         hedge_positions.append(hedge)
         trade_sizes.append(abs(delta_change))
         transaction_costs.append(trading_cost)
         portfolio_values.append(portfolio_value)
+        target_deltas.append(target_delta)
 
     return {
         "portfolio_values": np.asarray(portfolio_values, dtype=float),
         "hedge_positions": np.asarray(hedge_positions, dtype=float),
         "trade_sizes": np.asarray(trade_sizes, dtype=float),
         "transaction_costs": np.asarray(transaction_costs, dtype=float),
+        "target_deltas": np.asarray(target_deltas, dtype=float),
     }
 
 
@@ -98,7 +114,7 @@ def rollout_delta_hedge(
     sigma: float,
     T: float,
     cost: float,
-) -> dict[str, np.ndarray | float]:
+) -> dict[str, np.ndarray]:
     steps = len(prices)
     dt = T / steps
     hedge = 0.0
@@ -107,6 +123,7 @@ def rollout_delta_hedge(
     hedge_positions = []
     trade_sizes = []
     transaction_costs = []
+    target_deltas = []
 
     for t in range(steps - 1):
         tau = max(T - t * dt, 1e-12)
@@ -122,25 +139,31 @@ def rollout_delta_hedge(
 
         next_tau = max(T - (t + 1) * dt, 0.0)
         option_value = bs_call_price(S=prices[t + 1], K=K, r=mu, sigma=sigma, T=next_tau)
+        next_target_delta = float(bs_delta(prices[t + 1], K, mu, sigma, max(next_tau, 1e-12)))
         portfolio_value = option_value - hedge * prices[t + 1] + cash
 
         hedge_positions.append(hedge)
         trade_sizes.append(abs(delta_change))
         transaction_costs.append(trading_cost)
         portfolio_values.append(portfolio_value)
+        target_deltas.append(next_target_delta)
 
     return {
         "portfolio_values": np.asarray(portfolio_values, dtype=float),
         "hedge_positions": np.asarray(hedge_positions, dtype=float),
         "trade_sizes": np.asarray(trade_sizes, dtype=float),
         "transaction_costs": np.asarray(transaction_costs, dtype=float),
+        "target_deltas": np.asarray(target_deltas, dtype=float),
     }
 
 
-def compute_metrics(rollout: dict[str, np.ndarray | float]) -> MetricDict:
+def compute_metrics(rollout: dict[str, np.ndarray]) -> MetricDict:
     portfolio_values = np.asarray(rollout["portfolio_values"], dtype=float)
     trade_sizes = np.asarray(rollout["trade_sizes"], dtype=float)
     transaction_costs = np.asarray(rollout["transaction_costs"], dtype=float)
+    hedge_positions = np.asarray(rollout["hedge_positions"], dtype=float)
+    target_deltas = np.asarray(rollout["target_deltas"], dtype=float)
+    hedge_gap = hedge_positions - target_deltas
 
     if len(portfolio_values) <= 1:
         step_pnl = np.zeros(1, dtype=float)
@@ -156,6 +179,8 @@ def compute_metrics(rollout: dict[str, np.ndarray | float]) -> MetricDict:
         "mean_abs_step_pnl": float(np.mean(np.abs(step_pnl))),
         "terminal_pnl": terminal_pnl,
         "terminal_abs_pnl": abs(terminal_pnl),
+        "hedge_gap_mse": float(np.mean(hedge_gap**2)) if hedge_gap.size else 0.0,
+        "mean_abs_hedge_gap": float(np.mean(np.abs(hedge_gap))) if hedge_gap.size else 0.0,
         "avg_turnover": float(np.mean(trade_sizes)) if trade_sizes.size else 0.0,
         "avg_transaction_cost": float(np.mean(transaction_costs)) if transaction_costs.size else 0.0,
     }
@@ -188,6 +213,8 @@ def print_summary(summary: StrategySummary) -> None:
         ("mean_abs_step_pnl", "lower"),
         ("terminal_pnl", "closer to 0"),
         ("terminal_abs_pnl", "lower"),
+        ("hedge_gap_mse", "lower"),
+        ("mean_abs_hedge_gap", "lower"),
         ("avg_turnover", "lower"),
         ("avg_transaction_cost", "lower"),
     ]
@@ -224,7 +251,7 @@ def print_summary(summary: StrategySummary) -> None:
 
     print("-" * 86)
     print("Primary win criteria: lower hedging MSE and lower PnL variance.")
-    print("Drift metrics are shown as directional diagnostics; values closer to 0 are better.")
+    print("Hedge-gap metrics show how closely PPO tracks the Black-Scholes teacher signal.")
 
 
 def benchmark(
@@ -237,7 +264,8 @@ def benchmark(
     T: float = typer.Option(1.0, help="Time to maturity in years."),
     steps: int = typer.Option(252, help="Number of simulation steps per path."),
     cost: float = typer.Option(0.001, help="Transaction-cost rate per unit traded."),
-    hedge_step: float = typer.Option(0.3, help="Per-step hedge adjustment size used by PPO."),
+    hedge_step: float = typer.Option(0.1, help="Per-step hedge adjustment size used when action_mode=adjust."),
+    action_mode: str = typer.Option("target", help="Action semantics expected by the PPO model: target or adjust."),
     seed: int = typer.Option(42, help="Random seed for reproducible shared paths."),
     json_out: Path | None = typer.Option(None, help="Optional path to write the benchmark summary as JSON."),
 ) -> None:
@@ -246,6 +274,8 @@ def benchmark(
         raise typer.BadParameter("episodes must be positive")
     if steps < 3:
         raise typer.BadParameter("steps must be at least 3")
+    if action_mode not in {"target", "adjust"}:
+        raise typer.BadParameter("action_mode must be either 'target' or 'adjust'")
 
     model = PPO.load(model_path)
     rng = np.random.default_rng(seed)
@@ -266,6 +296,7 @@ def benchmark(
             T=T,
             cost=cost,
             hedge_step=hedge_step,
+            action_mode=action_mode,
         )
         delta_rollout = rollout_delta_hedge(
             prices=prices,
